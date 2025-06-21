@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.tmp
+*.bak
+*.matrix_backup
+.DS_Store
+Thumbs.db
+.idea/
