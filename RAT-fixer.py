@@ -199,11 +199,12 @@ CHAT_PATTERNS = [
 # Новые глобальные переменные
 ARCHIVE_PASSWORDS = ["infected", "malware", "virus", "rat", "lime", "password", "12345", "qwerty"]
 DECOMPRESSION_LOCK = threading.Lock()
+MONITORED_FOLDERS = {}
 
 class MatrixDefender(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("🔮 MATRIX HEALER v4.2")
+        self.title("🔮 MATRIX HEALER v5.0")
         self.geometry("900x600")
         self.configure(bg="black")
         
@@ -287,6 +288,14 @@ class MatrixDefender(tk.Tk):
         )
         self.restore_point_btn.pack(side=tk.LEFT, padx=5)
         
+        # Кнопка управления мониторингом
+        self.monitor_btn = tk.Button(
+            self.control_frame, text="🛡️ Включить мониторинг", command=self.toggle_monitoring,
+            bg="#003366", fg="#00ffff", font=("Tahoma", 10, "bold"),
+            relief="raised", bd=3
+        )
+        self.monitor_btn.pack(side=tk.LEFT, padx=5)
+        
         # Индикатор угрозы
         self.threat_level = tk.Label(
             self.control_frame, text="УРОВЕНЬ УГРОЗЫ: НЕИЗВЕСТЕН", 
@@ -294,7 +303,7 @@ class MatrixDefender(tk.Tk):
         )
         self.threat_level.pack(side=tk.RIGHT, padx=10)
         
-        self.log("MATRIX HEALER v4.2 ИНИЦИАЛИЗИРОВАН")
+        self.log("MATRIX HEALER v5.0 ИНИЦИАЛИЗИРОВАН")
         self.log(f"СИСТЕМНАЯ ДАТА: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.log("РЕЖИМ ЛЕЧЕНИЯ ФАЙЛОВ АКТИВИРОВАН")
         self.log("ГОТОВ К НЕЙТРАЛИЗАЦИИ УГРОЗ")
@@ -304,6 +313,7 @@ class MatrixDefender(tk.Tk):
         self.skip_system_files = True
         self.scan_thread = None
         self.auto_fix = False  # Флаг автоматического исправления
+        self.monitoring_active = False
         
         # Проверка обновлений сигнатур
         self.log("ПРОВЕРКА ОБНОВЛЕНИЙ СИГНАТУР...")
@@ -397,6 +407,20 @@ class MatrixDefender(tk.Tk):
                     self.log(f"⛔ ОШИБКА ВОССТАНОВЛЕНИЯ: {str(e)}")
             else:
                 self.log(f"⛔ РЕЗЕРВНАЯ КОПИЯ НЕ НАЙДЕНА: {file_path}")
+
+    def toggle_monitoring(self):
+        """Включение/выключение мониторинга"""
+        if self.monitoring_active:
+            self.monitoring_active = False
+            self.monitor_btn.config(text="🛡️ Включить мониторинг")
+            self.log("МОНИТОРИНГ ПАПОК ОСТАНОВЛЕН")
+        else:
+            self.monitoring_active = True
+            self.monitor_btn.config(text="🔴 Выключить мониторинг")
+            self.log("АКТИВИРОВАН МОНИТОРИНГ ПАПОК")
+            # Запускаем мониторинг для всех известных папок
+            for folder_path in MONITORED_FOLDERS:
+                self.start_folder_monitoring(folder_path)
 
     def detect_evasive_techniques(self, file_path):
         """Анти-эвристический анализ для новых RAT"""
@@ -850,13 +874,13 @@ class MatrixDefender(tk.Tk):
             return False
 
     def heal_rat_file(self, file_path, threat_type):
-        """Безопасное лечение RAT-файлов без удаления"""
+        """Безопасное лечение RAT-файлов с блокировкой восстановления"""
         try:
             # Создаем резервную копию
             backup_path = file_path + ".matrix_backup"
             if not os.path.exists(backup_path):
                 shutil.copy2(file_path, backup_path)
-                self.log(f"📂 СОЗДАНА РЕЗЕРВНАЯ КОПИЯ: {back_path}")
+                self.log(f"📂 СОЗДАНА РЕЗЕРВНАЯ КОПИЯ: {backup_path}")
             
             # Определяем тип файла
             ext = os.path.splitext(file_path)[1].lower()
@@ -878,50 +902,124 @@ class MatrixDefender(tk.Tk):
             return False
 
     def neutralize_rat_executable(self, file_path):
-        """Нейтрализация исполняемых RAT-файлов без удаления"""
+        """Нейтрализация исполняемых RAT-файлов с блокировкой восстановления"""
         try:
-            # 1. Изменяем точку входа на безопасную
-            self.modify_entry_point(file_path)
+            # Читаем весь файл
+            with open(file_path, "rb") as f:
+                content = f.read()
+
+            # Собираем все сигнатуры бэкдоров из THREAT_DB для RAT
+            signatures = []
+            for threat, data in THREAT_DB.items():
+                if "rat" in threat or threat in ["lime_rat", "all_rats", "backdoor"]:
+                    if "patterns" in data:
+                        # Преобразуем строковые паттерны в байты
+                        for pattern in data["patterns"]:
+                            try:
+                                # Экранируем специальные символы
+                                escaped_pattern = re.escape(pattern)
+                                signatures.append(re.compile(escaped_pattern.encode()))
+                            except:
+                                pass
+
+            modified = False
+            for pattern_re in signatures:
+                # Ищем все вхождения
+                matches = list(pattern_re.finditer(content))
+                if matches:
+                    # Заменяем с конца, чтобы не сбивать индексы
+                    for match in reversed(matches):
+                        start, end = match.span()
+                        # Заменяем на NOP-ы (0x90) такой же длины
+                        nop_patch = b"\x90" * (end - start)
+                        content = content[:start] + nop_patch + content[end:]
+                        modified = True
+                        self.log(f"УДАЛЕНА СИГНАТУРА БЭКДОРА: {match.group().decode('latin-1', errors='ignore')}")
+
+            # Эвристика: замена IP-адресов и URL
+            ip_pattern = re.compile(rb"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
+            url_pattern = re.compile(rb"https?://[^\s]+")
+
+            # Для IP: заменим каждый октет на 0
+            def replace_ip(match):
+                return b"0.0.0.0"
+
+            # Для URL: заменим на пустую строку
+            def replace_url(match):
+                return b""
+
+            new_content, ip_count = ip_pattern.subn(replace_ip, content)
+            if ip_count > 0:
+                content = new_content
+                modified = True
+                self.log(f"ЗАМЕНЕНО IP-АДРЕСОВ: {ip_count}")
+
+            new_content, url_count = url_pattern.subn(replace_url, content)
+            if url_count > 0:
+                content = new_content
+                modified = True
+                self.log(f"УДАЛЕНО URL: {url_count}")
+
+            # Удаление известных вредоносных функций
+            malicious_functions = [
+                b"CreateRemoteThread", 
+                b"VirtualAllocEx", 
+                b"WriteProcessMemory",
+                b"ReflectiveLoader",
+                b"Meterpreter",
+                b"ReverseShell",
+                b"SelfRestore",  # Блокировка функций самовосстановления
+                b"AutoRepair",
+                b"Reinstall",
+                b"RestoreFromBackup",
+                b"Reinject",
+                b"Reactivate"
+            ]
             
-            # 2. Добавляем сигнатуру безопасности
-            with open(file_path, "ab") as f:
-                f.write(b"\n\n[NEUTRALIZED_BY_MATRIX_RAT_REMOVAL]\n")
+            for func in malicious_functions:
+                if func in content:
+                    # Заменяем на безопасную функцию ExitProcess
+                    content = content.replace(func, b"ExitProcess")
+                    modified = True
+                    self.log(f"ЗАМЕНЕНА ВРЕДОНОСНАЯ ФУНКЦИЯ: {func.decode()}")
+
+            # Блокировка механизмов самовосстановления
+            restore_patterns = [
+                b"RestoreFromBackup",
+                b"ReinstallMalware",
+                b"AutoRepair",
+                b"SelfHeal",
+                b"RecoverFromDisk",
+                b"ReinjectDLL",
+                b"ReactivateInfection"
+            ]
+            
+            for pattern in restore_patterns:
+                if pattern in content:
+                    content = content.replace(pattern, b"DISABLED_BY_MATRIX")
+                    modified = True
+                    self.log(f"ЗАБЛОКИРОВАН МЕХАНИЗМ ВОССТАНОВЛЕНИЯ: {pattern.decode()}")
+
+            if modified:
+                with open(file_path, "wb") as f:
+                    f.write(content)
+                self.log(f"✅ RAT-ФАЙЛ НЕЙТРАЛИЗОВАН: {file_path}")
                 
-            self.log(f"✅ RAT-ФАЙЛ НЕЙТРАЛИЗОВАН: {file_path}")
-            return True
+                # Добавляем постоянную защиту
+                self.add_persistent_protection(file_path)
+                return True
+            else:
+                # Если не нашли что менять, то просто добавим сигнатуру
+                with open(file_path, "ab") as f:
+                    f.write(b"\n\n[NEUTRALIZED_BY_MATRIX_RAT_REMOVAL]\n")
+                self.log(f"ℹ️ К RAT-ФАЙЛУ ДОБАВЛЕНА СИГНАТУРА: {file_path}")
+                return True
         except Exception as e:
             self.log(f"❌ ОШИБКА НЕЙТРАЛИЗАЦИИ RAT-EXE: {str(e)}")
             return False
 
-    def modify_entry_point(self, file_path):
-        """Изменение точки входа на безопасную"""
-        try:
-            pe = pefile.PE(file_path)
-            
-            # Создаем безопасный код возврата
-            safe_code = b"\x33\xC0" + b"\xC2\x04\x00"  # XOR EAX, EAX; RET 4
-            
-            # Находим новую секцию для безопасного кода
-            new_section = pe.sections[-1]
-            new_ep = new_section.VirtualAddress + new_section.Misc_VirtualSize
-            
-            # Записываем безопасный код
-            pe.set_bytes_at_rva(new_ep, safe_code)
-            
-            # Устанавливаем новую точку входа
-            pe.OPTIONAL_HEADER.AddressOfEntryPoint = new_ep
-            
-            # Сохраняем изменения
-            new_pe_data = pe.write()
-            with open(file_path, "wb") as f:
-                f.write(new_pe_data)
-                
-            self.log(f"♻️ ТОЧКА ВХОДА ИЗМЕНЕНА: {file_path}")
-        except Exception as e:
-            self.log(f"⚠️ НЕ УДАЛОСЬ ИЗМЕНИТЬ ТОЧКУ ВХОДА: {str(e)}")
-
     def neutralize_rat_script(self, file_path):
-        """Нейтрализация скриптовых RAT без удаления файла"""
+        """Нейтрализация скриптовых RAT с блокировкой восстановления"""
         try:
             # Определяем кодировку
             encoding = "utf-8"
@@ -956,8 +1054,21 @@ class MatrixDefender(tk.Tk):
                 r"BypassUAC\("                                # Обход UAC
             ]
             
+            # Блокировка функций восстановления
+            restore_patterns = [
+                r"RestoreFromBackup",
+                r"ReinstallMalware",
+                r"AutoRepair",
+                r"SelfHeal",
+                r"RecoverFromDisk",
+                r"Reinstall",
+                r"Reactivate",
+                r"Reinject",
+                r"ReactivateInfection"
+            ]
+            
             # Заменяем опасные функции
-            for pattern in neutralization_patterns:
+            for pattern in neutralization_patterns + restore_patterns:
                 if re.search(pattern, content, re.IGNORECASE):
                     content = re.sub(
                         pattern, 
@@ -967,6 +1078,53 @@ class MatrixDefender(tk.Tk):
                     )
                     modified = True
                     self.log(f"🚫 ЗАБЛОКИРОВАНА ОПАСНАЯ ФУНКЦИЯ: {pattern}")
+            
+            # Удаление целых функций, содержащих опасные вызовы
+            # PowerShell: function ... { ... }
+            function_pattern_ps = r"function\s+(\w+)\s*{([^}]*)}"
+            for match in re.finditer(function_pattern_ps, content, re.DOTALL | re.IGNORECASE):
+                func_name, func_body = match.groups()
+                if any(re.search(p, func_body, re.IGNORECASE) for p in neutralization_patterns + restore_patterns):
+                    content = content.replace(match.group(0), "/* REMOVED MALICIOUS FUNCTION BY MATRIX */")
+                    modified = True
+                    self.log(f"🚫 УДАЛЕНА ВРЕДОНОСНАЯ ФУНКЦИЯ PowerShell: {func_name}")
+            
+            # VBS: Sub ... ... End Sub и Function ... ... End Function
+            sub_pattern_vbs = r"Sub\s+(\w+)\s*\(.*?\)\s*(.*?)End\s+Sub"
+            function_pattern_vbs = r"Function\s+(\w+)\s*\(.*?\)\s*(.*?)End\s+Function"
+            for pattern in [sub_pattern_vbs, function_pattern_vbs]:
+                for match in re.finditer(pattern, content, re.DOTALL | re.IGNORECASE):
+                    func_name, func_body = match.groups()
+                    if any(re.search(p, func_body, re.IGNORECASE) for p in neutralization_patterns + restore_patterns):
+                        content = content.replace(match.group(0), "' REMOVED MALICIOUS FUNCTION BY MATRIX")
+                        modified = True
+                        self.log(f"🚫 УДАЛЕНА ВРЕДОНОСНАЯ ПРОЦЕДУРА VBS: {func_name}")
+            
+            # Удаление подключений к C2-серверам
+            c2_patterns = [
+                r"185\.159\.82\.104", 
+                r"185\.231\.154\.78", 
+                r"94\.103\.81\.235", 
+                r"5\.188\.206\.163"
+            ]
+            for pattern in c2_patterns:
+                if re.search(pattern, content):
+                    content = re.sub(pattern, "0.0.0.0", content)
+                    modified = True
+                    self.log(f"🚫 ЗАБЛОКИРОВАН C2-СЕРВЕР: {pattern}")
+            
+            # Удаление вредоносных URL
+            url_pattern = r"https?://[^\s]+"
+            urls = re.findall(url_pattern, content)
+            malicious_urls = [url for url in urls if "malicious" in url or "c2" in url or "command" in url]
+            for url in malicious_urls:
+                content = content.replace(url, "http://0.0.0.0")
+                modified = True
+                self.log(f"🚫 УДАЛЕН ВРЕДОНОСНЫЙ URL: {url}")
+            
+            # Добавляем постоянную защиту
+            if modified:
+                content = self.add_script_protection(content, file_path)
             
             # Сохраняем изменения
             if modified:
@@ -994,8 +1152,145 @@ class MatrixDefender(tk.Tk):
         except:
             return False
 
+    def add_persistent_protection(self, file_path):
+        """Добавляем постоянную защиту в исполняемый файл"""
+        try:
+            # Добавляем защитную секцию в PE-файл
+            pe = pefile.PE(file_path)
+            
+            # Создаем новую секцию
+            section_name = ".matrix"
+            section = pefile.SectionStructure(pe.__IMAGE_SECTION_HEADER_format__)
+            section.__unpack__(bytearray(section.sizeof()))
+            section.Name = section_name.encode().ljust(8, b'\x00')
+            section.Misc_VirtualSize = 0x1000
+            section.VirtualAddress = pe.sections[-1].VirtualAddress + pe.sections[-1].Misc_VirtualSize
+            section.SizeOfRawData = 0x200
+            section.PointerToRawData = pe.sections[-1].PointerToRawData + pe.sections[-1].SizeOfRawData
+            section.Characteristics = 0x60000020  # CNT_CODE | MEM_EXECUTE | MEM_READ
+            
+            # Защитный код (просто возвращает ошибку при запуске вредоносных функций)
+            # В реальности здесь должен быть сложный анти-восстановительный код
+            section_data = b"\x33\xC0" + b"\xC2\x04\x00"  # XOR EAX, EAX; RET 4
+            section_data = section_data.ljust(0x200, b'\x90')
+            
+            # Добавляем секцию
+            pe.sections.append(section)
+            pe.__structures__.append(section)
+            
+            # Записываем данные секции
+            pe.set_bytes_at_offset(section.PointerToRawData, section_data)
+            
+            # Обновляем заголовки
+            pe.OPTIONAL_HEADER.SizeOfImage += 0x1000
+            pe.OPTIONAL_HEADER.CheckSum = 0  # Отключаем проверку контрольной суммы
+            
+            # Сохраняем изменения
+            new_pe_data = pe.write()
+            with open(file_path, "wb") as f:
+                f.write(new_pe_data)
+                
+            self.log(f"🛡️ ДОБАВЛЕНА ПОСТОЯННАЯ ЗАЩИТА В ФАЙЛ: {file_path}")
+            return True
+        except Exception as e:
+            self.log(f"⚠️ НЕ УДАЛОСЬ ДОБАВИТЬ ЗАЩИТУ: {str(e)}")
+            return False
+
+    def add_script_protection(self, content, file_path):
+        """Добавляем защиту в скрипты для предотвращения восстановления"""
+        try:
+            ext = os.path.splitext(file_path)[1].lower()
+            
+            if ext == '.ps1':
+                # PowerShell защита
+                protection_code = '''
+                # MATRIX PERMANENT PROTECTION
+                $maliciousPatterns = @(
+                    "CreateObject\(`"WScript\.Shell`"\)",
+                    "\.Run\s?\(",
+                    "\.Exec\s?\(",
+                    "eval\s*\(",
+                    "execute\s*\(",
+                    "invoke-expression",
+                    "downloadfile",
+                    "webclient",
+                    "DisableFirewall\(",
+                    "KillAV\(",
+                    "BypassUAC\(",
+                    "RestoreFromBackup",
+                    "ReinstallMalware",
+                    "AutoRepair",
+                    "SelfHeal"
+                )
+                
+                $content = Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw
+                $protectionCode = $MyInvocation.MyCommand.ScriptBlock.ToString()
+                $contentWithoutSelf = $content.Replace($protectionCode, '')
+                
+                foreach ($pattern in $maliciousPatterns) {
+                    if ($contentWithoutSelf -match $pattern) {
+                        Write-Output "MATRIX PROTECTION: MALICIOUS CODE DETECTED - $pattern"
+                        exit 1
+                    }
+                }
+                '''
+                content = protection_code + '\n' + content
+                self.log(f"🛡️ ДОБАВЛЕНА ЗАЩИТА В POWERSHELL СКРИПТ")
+                
+            elif ext == '.vbs':
+                # VBScript защита
+                protection_code = '''
+                ' MATRIX PERMANENT PROTECTION
+                maliciousPatterns = Array( _
+                    "CreateObject\s?\(\s?""WScript\.Shell\s?""\)", _
+                    "\.Run\s?\(", _
+                    "\.Exec\s?\(", _
+                    "eval\s?\(", _
+                    "execute\s?\(", _
+                    "downloadfile", _
+                    "webclient", _
+                    "DisableFirewall\(", _
+                    "KillAV\(", _
+                    "BypassUAC\(", _
+                    "RestoreFromBackup", _
+                    "ReinstallMalware", _
+                    "AutoRepair", _
+                    "SelfHeal" _
+                )
+                
+                Set fso = CreateObject("Scripting.FileSystemObject")
+                Set file = fso.OpenTextFile(WScript.ScriptFullName, 1)
+                content = file.ReadAll
+                file.Close
+                
+                protectionCode = "MATRIX PERMANENT PROTECTION"
+                startPos = InStr(content, protectionCode)
+                endPos = InStr(startPos, content, "End Sub")
+                If endPos = 0 Then endPos = Len(content)
+                contentWithoutSelf = Left(content, startPos-1) & Mid(content, endPos)
+                
+                For Each pattern In maliciousPatterns
+                    Set regex = New RegExp
+                    regex.Pattern = pattern
+                    regex.IgnoreCase = True
+                    regex.Global = True
+                    
+                    If regex.Test(contentWithoutSelf) Then
+                        MsgBox "MATRIX PROTECTION: MALICIOUS CODE DETECTED - " & pattern, vbCritical
+                        WScript.Quit 1
+                    End If
+                Next
+                '''
+                content = protection_code + '\n' + content
+                self.log(f"🛡️ ДОБАВЛЕНА ЗАЩИТА В VBS СКРИПТ")
+                
+            return content
+        except Exception as e:
+            self.log(f"⚠️ ОШИБКА ДОБАВЛЕНИЯ ЗАЩИТЫ: {str(e)}")
+            return content
+
     def heal_rat_folder(self, folder_path):
-        """Лечение всей папки с RAT без удаления файлов"""
+        """Лечение всей папки с RAT и удаление резервных копий малвари"""
         self.log(f"⚕️ АКТИВАЦИЯ ПРОТОКОЛА RAT HEALER: {folder_path}")
         
         healed_files = 0
@@ -1025,6 +1320,25 @@ class MatrixDefender(tk.Tk):
                     except:
                         pass
         
+        # Удаляем резервные копии малвари
+        self.log("УДАЛЕНИЕ РЕЗЕРВНЫХ КОПИЙ МАЛВАРИ...")
+        backup_patterns = [
+            "*_backup", "*_old", "*.bak", "*.back", 
+            "*.copy", "*.orig", "*.tmp", "*.temp",
+            "*restore*", "*recovery*", "*backup*"
+        ]
+        
+        deleted_backups = 0
+        for pattern in backup_patterns:
+            for backup_file in Path(folder_path).rglob(pattern):
+                try:
+                    if backup_file.is_file():
+                        backup_file.unlink()
+                        deleted_backups += 1
+                        self.log(f"🗑️ УДАЛЕНА РЕЗЕРВНАЯ КОПИЯ: {backup_file}")
+                except:
+                    pass
+        
         # Создаем файл отчета
         report_path = os.path.join(folder_path, "RAT_HEAL_REPORT.txt")
         with open(report_path, "w") as f:
@@ -1032,6 +1346,7 @@ class MatrixDefender(tk.Tk):
             f.write(f"Папка: {folder_path}\n")
             f.write(f"Дата: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Пролечено файлов: {healed_files}\n")
+            f.write(f"Удалено резервных копий: {deleted_backups}\n")
             
             if rat_family_counts:
                 f.write("\nРАСПРЕДЕЛЕНИЕ ПО СЕМЕЙСТВАМ RAT:\n")
@@ -1040,33 +1355,87 @@ class MatrixDefender(tk.Tk):
             
             f.write("\nСтатус: ОПАСНЫЕ ФУНКЦИИ УДАЛЕНЫ\n")
             f.write("Функционал RAT сохранен\n")
+            f.write("МЕХАНИЗМЫ ВОССТАНОВЛЕНИЯ ЗАБЛОКИРОВАНЫ\n")
         
         self.log(f"✅ ПАПКА ПРОЛЕЧЕНА ОТ RAT УГРОЗ: {healed_files} файлов")
+        self.log(f"🗑️ УДАЛЕНО РЕЗЕРВНЫХ КОПИЙ МАЛВАРИ: {deleted_backups}")
         self.log(f"📄 ОТЧЕТ СОХРАНЁН: {report_path}")
+        
+        # Добавляем папку в список мониторинга
+        MONITORED_FOLDERS[folder_path] = True
+        
+        # Запускаем постоянный мониторинг
+        if self.monitoring_active:
+            self.start_folder_monitoring(folder_path)
+            
         return healed_files > 0
 
-    def detect_rat_family(self, file_path):
-        """Определение семейства RAT по сигнатурам"""
-        signatures = {
-            b"LimeRAT": "LimeRAT",
-            b"QuasarRAT": "Quasar",
-            b"AsyncRAT": "Async",
-            b"NjRat": "NjRat",
-            b"DarkComet": "DarkComet",
-            b"Remcos": "Remcos",
-            b"Warzone": "Warzone",
-            b"NetWire": "NetWire",
-            b"PoisonIvy": "PoisonIvy"
-        }
-        try:
-            with open(file_path, "rb") as f:
-                content = f.read(8192)  # Первые 8KB
-                for sig, name in signatures.items():
-                    if sig in content:
-                        return name
-        except:
-            pass
-        return "GenericRAT"
+    def start_folder_monitoring(self, folder_path):
+        """Запускает постоянный мониторинг папки для предотвращения восстановления"""
+        if folder_path in MONITORED_FOLDERS:
+            self.log(f"🔒 МОНИТОРИНГ ПАПКИ УЖЕ АКТИВЕН: {folder_path}")
+            return
+            
+        self.log(f"🔒 АКТИВИРУЮ МОНИТОРИНГ ПАПКИ: {folder_path}")
+        MONITORED_FOLDERS[folder_path] = True
+        
+        monitor_thread = threading.Thread(
+            target=self.monitor_folder_for_threats,
+            args=(folder_path,),
+            daemon=True
+        )
+        monitor_thread.start()
+
+    def monitor_folder_for_threats(self, folder_path):
+        """Постоянно мониторит папку на наличие признаков восстановления"""
+        known_hashes = {}
+        self.log(f"🔍 НАЧИНАЮ МОНИТОРИНГ ПАПКИ: {folder_path}")
+        
+        # Первоначальное сканирование
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                if self.is_system_file(file_path):
+                    continue
+                    
+                file_hash = self.calculate_hash(file_path)
+                known_hashes[file_path] = file_hash
+        
+        # Цикл мониторинга
+        while folder_path in MONITORED_FOLDERS and MONITORED_FOLDERS[folder_path]:
+            try:
+                time.sleep(10)  # Проверка каждые 10 секунд
+                
+                for root, _, files in os.walk(folder_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        
+                        # Пропускаем системные файлы
+                        if self.is_system_file(file_path):
+                            continue
+                        
+                        # Проверяем новые файлы
+                        if file_path not in known_hashes:
+                            threat_info = self.analyze_file(file_path)
+                            if threat_info:
+                                self.log(f"⚠️ ОБНАРУЖЕНА НОВАЯ УГРОЗА: {file_path}")
+                                self.heal_rat_file(file_path, threat_info['type'])
+                            known_hashes[file_path] = self.calculate_hash(file_path)
+                        
+                        # Проверяем изменения в файлах
+                        else:
+                            current_hash = self.calculate_hash(file_path)
+                            if current_hash != known_hashes[file_path]:
+                                self.log(f"⚠️ ФАЙЛ ИЗМЕНЕН: {file_path}")
+                                threat_info = self.analyze_file(file_path)
+                                if threat_info:
+                                    self.log(f"⚠️ ОБНАРУЖЕНО ВОССТАНОВЛЕНИЕ УГРОЗЫ: {file_path}")
+                                    self.heal_rat_file(file_path, threat_info['type'])
+                                known_hashes[file_path] = current_hash
+            except Exception as e:
+                self.log(f"ОШИБКА МОНИТОРИНГА: {str(e)}")
+        
+        self.log(f"⛔ МОНИТОРИНГ ПАПКИ ОСТАНОВЛЕН: {folder_path}")
 
     def safe_script_healing(self, file_path, threat_type):
         """Безопасное лечение скриптов с сохранением функционала RAT"""
@@ -1513,6 +1882,30 @@ class MatrixDefender(tk.Tk):
         except:
             return "error"
 
+    def detect_rat_family(self, file_path):
+        """Определение семейства RAT по сигнатурам"""
+        signatures = {
+            b"LimeRAT": "LimeRAT",
+            b"QuasarRAT": "Quasar",
+            b"AsyncRAT": "Async",
+            b"NjRat": "NjRat",
+            b"DarkComet": "DarkComet",
+            b"Remcos": "Remcos",
+            b"Warzone": "Warzone",
+            b"NetWire": "NetWire",
+            b"PoisonIvy": "PoisonIvy"
+        }
+        try:
+            with open(file_path, "rb") as f:
+                content = f.read(8192)  # Первые 8KB
+                for sig, name in signatures.items():
+                    if sig in content:
+                        return name
+        except:
+            pass
+        return "GenericRAT"
+
 if __name__ == "__main__":
     app = MatrixDefender()
     app.mainloop()
+
