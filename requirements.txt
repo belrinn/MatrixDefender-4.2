@@ -1,3 +1,1 @@
-pip install pefile
-psutil
-requests
+pip install pefile psutil requests pywin32
